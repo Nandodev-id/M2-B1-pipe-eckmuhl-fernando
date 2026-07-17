@@ -1,10 +1,5 @@
-"""M2-B1 — Pipeline de préparation pour le scoring crédit Eckmühl.
+"""M2-B1 — Pipeline de préparation pour le scoring crédit Eckmühl."""
 
-À compléter par toi pendant le brief. Le squelette pose les bonnes briques
-scikit-learn (ColumnTransformer + Pipeline) mais les listes de features et
-les choix d'encodage sont des TODO — c'est ce que ton audit qualité va
-trancher.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,116 +11,278 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
-# ---------------------------------------------------------------------------
-# TODO 1 — Remplir les 3 listes de features à partir de ton EDA
-# ---------------------------------------------------------------------------
-# Une feature peut être :
-#   • Numérique continue          → NUMERIC_FEATURES
-#   • Catégorielle ordonnée       → ORDINAL_FEATURES (modalités à ordonner)
-#   • Catégorielle non ordonnée   → CATEGORICAL_FEATURES (faible cardinalité)
-#
-# Décide en regardant le notebook (distribution, sens métier).
-# Tu peux exclure des features (ex. variable sensible évidente) — argumente
-# ce choix dans ton notebook ET ton audit.md.
 
 NUMERIC_FEATURES: list[str] = [
-    # ex. "duration_months", "credit_amount", "age", ...
+    "duration_months",
+    "credit_amount",
+    "installment_rate_pct_income",
+    "residence_since_years",
+    "age",
+    "n_existing_credits",
+    "n_people_liable",
 ]
-ORDINAL_FEATURES: dict[str, list[str]] = {
-    # ex. "savings_account": ["< 100 DM", "100-500 DM", "500-1000 DM",
-    #                         ">= 1000 DM", "unknown / no savings"],
-    # Note : l'ordre des modalités encode la sémantique.
+
+BASE_ORDINAL_FEATURES: dict[str, list[str]] = {
+    "employment_since": [
+        "unemployed",
+        "< 1 year",
+        "1-4 years",
+        "4-7 years",
+        ">= 7 years",
+    ],
 }
+
+ORDINAL_FEATURES: dict[str, list[str]] = {
+    **BASE_ORDINAL_FEATURES,
+    "customer_segment": [
+        "basic",
+        "plus",
+        "premium",
+        "private",
+    ],
+}
+
 CATEGORICAL_FEATURES: list[str] = [
-    # ex. "purpose", "housing", "telephone", ...
+    "checking_account_status",
+    "credit_history",
+    "purpose",
+    "savings_account",
+    "personal_status_sex",
+    "other_debtors",
+    "property",
+    "other_installment_plans",
+    "housing",
+    "job",
+    "telephone",
+    "foreign_worker",
 ]
+
 TARGET_COLUMN: str = "credit_risk"
-TARGET_MAPPING: dict[str, int] = {"good_credit": 0, "bad_credit": 1}
+
+TARGET_MAPPING: dict[str, int] = {
+    "good_credit": 0,
+    "bad_credit": 1,
+}
 
 
 def load_dataset(path: Path) -> tuple[pd.DataFrame, pd.Series]:
-    """Charge le CSV German Credit et retourne (X, y).
+    """Load and enrich the German Credit dataset.
 
-    Les features sont sélectionnées d'après les 3 listes définies ci-dessus.
-    Les colonnes du CSV qui ne sont dans aucune liste sont **droppées**
-    — sois explicite sur tes choix.
+    The supplementary file is joined by row position because it contains
+    exactly one customer_segment value for each row of the raw dataset.
+
+    Args:
+        path: Path to german_credit_raw.csv.
+
+    Returns:
+        A tuple containing the selected features and mapped target.
+
+    Raises:
+        FileNotFoundError: If an expected input file does not exist.
+        ValueError: If the target or supplementary dataset is invalid.
+        KeyError: If an expected feature is missing.
     """
-    df = pd.read_csv(path)
-    # TODO (tâche 5 bis — geste « adapter ») : un complément arrive en cours de
-    # mission → data/german_credit_supplement.csv (colonne `customer_segment`,
-    # même ordre de lignes). Charge-le, joins-le ici par position, décide de sa
-    # nature (numérique / ordinale / nominale ?) et ajoute-la à la BONNE liste
-    # de features ci-dessus. N'oublie pas ses ~4 % de manquants.
-    # (À toi de trouver comment charger et joindre ce complément — c'est le geste « adapter ».)
+    supplement_path = path.with_name("german_credit_supplement.csv")
+
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset brut introuvable : {path}")
+
+    if not supplement_path.exists():
+        raise FileNotFoundError(
+            f"Complément de données introuvable : {supplement_path}"
+        )
+
+    raw_df = pd.read_csv(path)
+    supplement_df = pd.read_csv(supplement_path)
+
+    if supplement_df.columns.tolist() != ["customer_segment"]:
+        raise ValueError(
+            "Le complément doit contenir uniquement la colonne "
+            "'customer_segment'."
+        )
+
+    if len(raw_df) != len(supplement_df):
+        raise ValueError(
+            "Le dataset brut et le complément doivent contenir "
+            "le même nombre de lignes."
+        )
+
+    df = pd.concat(
+        [
+            raw_df.reset_index(drop=True),
+            supplement_df.reset_index(drop=True),
+        ],
+        axis=1,
+    )
+
     y = df[TARGET_COLUMN].map(TARGET_MAPPING)
+
     if y.isna().any():
-        unknown = df.loc[y.isna(), TARGET_COLUMN].unique().tolist()
-        raise ValueError(f"Cible non mappée : {unknown}")
-    all_features = NUMERIC_FEATURES + list(ORDINAL_FEATURES) + CATEGORICAL_FEATURES
-    missing = [c for c in all_features if c not in df.columns]
-    if missing:
-        raise KeyError(f"Colonnes attendues absentes du CSV : {missing}")
+        unknown_targets = (
+            df.loc[y.isna(), TARGET_COLUMN]
+            .drop_duplicates()
+            .tolist()
+        )
+
+        raise ValueError(
+            f"Cible non mappée : {unknown_targets}"
+        )
+
+    all_features = (
+        NUMERIC_FEATURES
+        + list(ORDINAL_FEATURES)
+        + CATEGORICAL_FEATURES
+    )
+
+    duplicated_features = {
+        feature
+        for feature in all_features
+        if all_features.count(feature) > 1
+    }
+
+    if duplicated_features:
+        raise ValueError(
+            "Features présentes dans plusieurs familles : "
+            f"{sorted(duplicated_features)}"
+        )
+
+    missing_features = [
+        feature
+        for feature in all_features
+        if feature not in df.columns
+    ]
+
+    if missing_features:
+        raise KeyError(
+            f"Colonnes attendues absentes du CSV : {missing_features}"
+        )
+
     X = df[all_features].copy()
-    return X, y
+
+    return X, y.astype("int64")
 
 
-def build_preprocessor() -> ColumnTransformer:
-    """Construit le ColumnTransformer.
+def _build_preprocessor(
+    include_customer_segment: bool,
+) -> ColumnTransformer:
+    """Build either the initial or adapted ColumnTransformer."""
+    ordinal_features = (
+        ORDINAL_FEATURES
+        if include_customer_segment
+        else BASE_ORDINAL_FEATURES
+    )
 
-    3 branches :
-      • num : imputation médiane + scaling
-      • ord : imputation modale + ordinal encoding (ordre défini par dict)
-      • cat : imputation modale + one-hot
-    """
     numeric_pipeline = Pipeline(
         steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
+            (
+                "imputer",
+                SimpleImputer(strategy="median"),
+            ),
+            (
+                "scaler",
+                StandardScaler(),
+            ),
         ]
     )
+
     ordinal_pipeline = Pipeline(
         steps=[
-            ("imputer", SimpleImputer(strategy="most_frequent")),
+            (
+                "imputer",
+                SimpleImputer(strategy="most_frequent"),
+            ),
             (
                 "ordinal",
                 OrdinalEncoder(
-                    categories=[ORDINAL_FEATURES[c] for c in ORDINAL_FEATURES],
+                    categories=[
+                        ordinal_features[column]
+                        for column in ordinal_features
+                    ],
                     handle_unknown="use_encoded_value",
                     unknown_value=-1,
                 ),
             ),
         ]
     )
+
     categorical_pipeline = Pipeline(
         steps=[
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+            (
+                "imputer",
+                SimpleImputer(strategy="most_frequent"),
+            ),
+            (
+                "onehot",
+                OneHotEncoder(
+                    handle_unknown="ignore",
+                    sparse_output=False,
+                ),
+            ),
         ]
     )
+
     return ColumnTransformer(
         transformers=[
-            ("num", numeric_pipeline, NUMERIC_FEATURES),
-            ("ord", ordinal_pipeline, list(ORDINAL_FEATURES)),
-            ("cat", categorical_pipeline, CATEGORICAL_FEATURES),
+            (
+                "num",
+                numeric_pipeline,
+                NUMERIC_FEATURES,
+            ),
+            (
+                "ord",
+                ordinal_pipeline,
+                list(ordinal_features),
+            ),
+            (
+                "cat",
+                categorical_pipeline,
+                CATEGORICAL_FEATURES,
+            ),
         ],
         remainder="drop",
         verbose_feature_names_out=False,
     )
 
 
-def fit_and_save(data_path: Path, output_path: Path) -> None:
-    """Fit le pipeline sur tout le dataset et sauve avec joblib.
+def build_preprocessor() -> ColumnTransformer:
+    """Build the final preprocessor including customer_segment."""
+    return _build_preprocessor(
+        include_customer_segment=True,
+    )
 
-    Note : on fit ici sur tout le dataset (pas de split) car en M2-B1
-    on produit le **pipeline de préparation**, pas un modèle de scoring.
-    Le pipeline sera rejoué tel quel sur tout nouveau lot de données.
+
+def fit_and_save(
+    data_path: Path,
+    output_path: Path,
+) -> None:
+    """Fit and persist the final preprocessing pipeline.
+
+    The pipeline is fitted on the complete dataset because this exercise
+    produces a preprocessing artifact rather than a predictive model.
     """
     X, _y = load_dataset(data_path)
-    preprocessor = build_preprocessor()
-    preprocessor.fit(X)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(preprocessor, output_path, compress=3)
-    print(f"Pipeline saved → {output_path}")
+
+    pipeline = Pipeline(
+        steps=[
+            (
+                "preprocessor",
+                build_preprocessor(),
+            ),
+        ]
+    )
+
+    pipeline.fit(X)
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    joblib.dump(
+        pipeline,
+        output_path,
+        compress=3,
+    )
 
 
 if __name__ == "__main__":

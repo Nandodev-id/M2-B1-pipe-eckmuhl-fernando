@@ -98,7 +98,7 @@ if __name__ == "__main__":
     #    +1 colonne si tu l'encodes en ordinal, +k colonnes si tu l'encodes
     #    en one-hot. C'est exactement ce que ce test fige.
 
-    expected_n_features: int | None = None  # ← reporte ici la valeur de ton notebook
+    expected_n_features: int = 58
 
     if expected_n_features is None:
         raise NotImplementedError(
