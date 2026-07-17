@@ -25,3 +25,8 @@ data/*.parquet
 
 # Artefacts produits
 *.joblib
+!src/pipeline.joblib
+
+anaconda_projects/
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
