@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Données : le CSV brut d'entrée est versionné (input du brief), les sorties
+# produites par l'apprenant (parquet propre) restent hors commit.
+data/*.csv
+data/*.parquet
+!data/.gitkeep
+!data/german_credit_raw.csv
+!data/german_credit_supplement.csv
+
+# Artefacts produits
+*.joblib
